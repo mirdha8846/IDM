@@ -2,54 +2,73 @@ package manager
 
 import (
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"sync"
+    "io"
+    "log"
+    "net/http"
+   
+    "os"
+   
+    "sync"
+    "time"
 )
 
-func StartDownloading(URI string, start, end int64, file *os.File,wg *sync.WaitGroup){
 
-	defer wg.Done()
-	req,err:=http.NewRequest("GET",URI,nil)
-	if err!=nil{
+func StartDownloading(URI string, start, end int64, file *os.File, wg *sync.WaitGroup) {
+    defer wg.Done()
+    const maxRetries = 3
+    var attempt int
 
-	}
+    
 
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-	client:=&http.Client{}
-	resp,err:=client.Do(req)
-	  if err != nil {
-        log.Printf("[Seg %d-%d] HTTP error: %v", start, end, err)
-        return
-    }
-    defer resp.Body.Close()
-	buf:=make([]byte,32*1024)
-	var offset=start
-    for {
-       n,err:=resp.Body.Read(buf)
-	   if n>0{
-		 if _, werr := file.WriteAt(buf[:n], offset); werr != nil {
-                log.Printf("Write error: %v", werr)
-                return
+    for attempt = 1; attempt <= maxRetries; attempt++ {
+        req, err := http.NewRequest("GET", URI, nil)
+        if err != nil {
+            log.Printf("[%s: %d-%d] Request creation error: %v", start, end, err)
+            return
+        }
+
+        req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+        client := &http.Client{}
+        resp, err := client.Do(req)
+        if err != nil {
+            log.Printf("[%s: %d-%d] HTTP error (attempt %d/%d): %v",  start, end, attempt, maxRetries, err)
+            time.Sleep(time.Second * 2)
+            continue
+        }
+        defer resp.Body.Close()
+
+        buf := make([]byte, 32*1024)
+        offset := start
+        for {
+            n, err := resp.Body.Read(buf)
+            if n > 0 {
+                if _, werr := file.WriteAt(buf[:n], offset); werr != nil {
+                    log.Printf("[%s: %d-%d] Write error: %v",  start, end, werr)
+                    return
+                }
+                offset += int64(n)
             }
-            offset += int64(n)
-	   }
-	    if err != nil {
-            if err != io.EOF {
-                log.Printf("Read error: %v", err)
+            if err != nil {
+                if err != io.EOF {
+                    log.Printf("[%s: %d-%d] Read error: %v",start, end, err)
+                    time.Sleep(time.Second * 2)
+                    break
+                }
+                return // success
             }
-            break
         }
     }
 
+    if attempt > maxRetries {
+        log.Printf("[%s: %d-%d] Failed after %d attempts",  start, end, maxRetries)
+    }
 }
 
-func Download(size int64,url string){
-	const parts=2
+
+func Download(size int64,url string,filename string){
+	const parts=8
 	partSize:=size/parts
-	 outFile := "output.file"
+	 outFile := filename
     file, err := os.Create(outFile)
     if err != nil {
         log.Fatal("File create error:", err)
@@ -58,7 +77,7 @@ func Download(size int64,url string){
 
 	 var wg sync.WaitGroup
 	 for i := 0; i < parts; i++ {
-		fmt.Println("goroutine %d is started",i)
+		fmt.Printf("goroutine started :%d",i)
         start := partSize * int64(i)
         end := start + partSize - 1
         if i == parts-1 {
